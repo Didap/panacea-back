@@ -38,7 +38,26 @@ Phases are independent and each ships with tests, a dated work log under `docs/`
 
 ## Phase 3 — Delegation system (deleghe)
 
-To be designed with William. Anticipated entities: `delegation`, `delegation_scope`, `delegation_revocation`. RLS policies will widen `health_document` access to include doctors with an active delegation.
+Designed 2026-05-19 with William. Full design: `docs/delegations_design_2026-05-19.md`.
+
+Highlights:
+- Primary use case is **citizen-to-citizen** (caregiver model, e.g. daughter managing grandmother's record). Citizen-to-doctor and doctor-to-doctor are variants of the same flow.
+- The future **delegate** initiates: sends an invitation, the **data owner** accepts.
+- Scope v1: **full-access only**. Permanent by default, optional `expires_at`.
+- Certification: email-verified parties, fiscal-code match, single-use sha256 token, OTP at acceptance, audit log on every transition, PDF mandate deferred to v1.1.
+- **Sub-delegation pre-authorized** when parent has `can_sub_delegate=true`; patient is notified instantly with an inline revoke link.
+- RLS on `health_documents` widens to "owner OR active delegate".
+- Write access included for delegates: they can upload/delete on behalf of the data owner, attributed to them in audit.
+
+Implementation roadmap:
+- [x] Migration: `delegations`, `delegation_requests` tables + indexes (commit 1, 2026-05-19)
+- [x] Migration: RLS update on `health_documents` + cascade trigger on parent revoke (commit 1, 2026-05-19)
+- [x] Drizzle schema + extended `auditActions` enum (commit 1, 2026-05-19)
+- [ ] Service: `DelegationsService` (create request, accept, reject, revoke, list)
+- [ ] Service: invitation email (Resend or dev console fallback) + OTP generation/verification
+- [ ] Controller: `/delegations`, `/delegation-requests`, `/inviti/:token` public accept endpoint
+- [ ] Cron: expire pending requests after 7d, expire delegations past `expires_at`
+- [ ] Web: "Richiedi delega" form, invitation accept flow, mandate list (active/expired/revoked), "operi per conto di X" banner, doctor sub-delegation UI
 
 ## Phase 4 — Institution onboarding
 

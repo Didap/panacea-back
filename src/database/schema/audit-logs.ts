@@ -10,6 +10,17 @@ export const auditActions = [
   'document.view',
   'document.download',
   'document.delete',
+  'delegation.request.created',
+  'delegation.request.cancelled',
+  'delegation.invitation.opened',
+  'delegation.invitation.otp.sent',
+  'delegation.invitation.otp.verified',
+  'delegation.invitation.otp.failed',
+  'delegation.accepted',
+  'delegation.rejected',
+  'delegation.expired',
+  'delegation.revoked',
+  'delegation.sub.created',
 ] as const;
 export type AuditAction = (typeof auditActions)[number];
 
