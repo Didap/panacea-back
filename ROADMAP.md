@@ -53,11 +53,13 @@ Implementation roadmap:
 - [x] Migration: `delegations`, `delegation_requests` tables + indexes (commit 1, 2026-05-19)
 - [x] Migration: RLS update on `health_documents` + cascade trigger on parent revoke (commit 1, 2026-05-19)
 - [x] Drizzle schema + extended `auditActions` enum (commit 1, 2026-05-19)
-- [ ] Service: `DelegationsService` (create request, accept, reject, revoke, list)
-- [ ] Service: invitation email (Resend or dev console fallback) + OTP generation/verification
-- [ ] Controller: `/delegations`, `/delegation-requests`, `/inviti/:token` public accept endpoint
-- [ ] Cron: expire pending requests after 7d, expire delegations past `expires_at`
-- [ ] Web: "Richiedi delega" form, invitation accept flow, mandate list (active/expired/revoked), "operi per conto di X" banner, doctor sub-delegation UI
+- [x] `DelegationsService`: create request, lookup-by-token, generate OTP, accept, accept-and-signup, reject, list, revoke, sub-delegate (commit 2, 2026-05-19)
+- [x] `NotificationsService` with console + Resend drivers; invitation, OTP, delegation-created, sub-delegation-notice, revoked emails (commit 2, 2026-05-19)
+- [x] Controllers: `/delegation-requests` (auth), `/inviti/:token` (public + token-based), `/delegations` (auth) (commit 2, 2026-05-19)
+- [x] Cron: expire pending requests after 7d, expire delegations past `expires_at` (commit 2, 2026-05-19)
+- [x] `X-Acting-As` header + subject resolver wired into `/documents` so delegates can read/upload on behalf of the data owner (commit 2, 2026-05-19)
+- [ ] Resend driver wired for real (currently stubbed; flip `NOTIFICATIONS_DRIVER=resend` once API keys land)
+- [ ] Web: "Richiedi delega" form, invitation accept flow, mandate list (active/expired/revoked), "operi per conto di X" banner, doctor sub-delegation UI (commit 3)
 
 ## Phase 4 — Institution onboarding
 

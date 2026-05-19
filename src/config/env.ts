@@ -34,6 +34,16 @@ const envSchema = z.object({
   MAX_UPLOAD_SIZE_MB: z.coerce.number().int().positive().default(10),
   LOGIN_LOCKOUT_MAX_ATTEMPTS: z.coerce.number().int().positive().default(10),
   LOGIN_LOCKOUT_DURATION_MIN: z.coerce.number().int().positive().default(15),
+
+  PUBLIC_WEB_BASE_URL: z.string().url().default('http://localhost:5173'),
+
+  NOTIFICATIONS_DRIVER: z.enum(['console', 'resend']).default('console'),
+  NOTIFICATIONS_FROM: z.string().default('Panacea <noreply@panacea.local>'),
+  RESEND_API_KEY: z.string().optional(),
+
+  INVITATION_TTL_DAYS: z.coerce.number().int().positive().default(7),
+  OTP_TTL_MINUTES: z.coerce.number().int().positive().default(10),
+  OTP_MAX_ATTEMPTS: z.coerce.number().int().positive().default(5),
 });
 
 export type Env = z.infer<typeof envSchema>;

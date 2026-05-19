@@ -5,6 +5,7 @@ import { fileTypeFromBuffer } from 'file-type';
 import { DatabaseService } from '../../database/database.service';
 import { StorageService } from '../storage/storage.service';
 import { AuditService } from '../audit/audit.service';
+import { DelegationsService } from '../delegations/delegations.service';
 import {
   healthDocuments,
   type DocumentCategory,
@@ -12,6 +13,7 @@ import {
 } from '../../database/schema';
 import type { AuthenticatedUser } from '../../common/types/authenticated-user';
 import { CodedException, ErrorCodes } from '../../common/constants/error-codes';
+import { resolveSubject } from '../../common/utils/subject-resolver';
 import type { Env } from '../../config/env';
 
 const ALLOWED_MIME = new Set([
@@ -24,8 +26,14 @@ const ALLOWED_MIME = new Set([
   'text/plain',
 ]);
 
-type CreateInput = {
+type CommonInput = {
   actor: AuthenticatedUser;
+  actingAs: string | null;
+  ip?: string;
+  userAgent?: string;
+};
+
+type CreateInput = CommonInput & {
   buffer: Buffer;
   originalName: string;
   declaredMime: string;
@@ -33,12 +41,9 @@ type CreateInput = {
   category: DocumentCategory;
   notes?: string;
   takenAt?: string;
-  ip?: string;
-  userAgent?: string;
 };
 
-type ListInput = {
-  actor: AuthenticatedUser;
+type ListInput = CommonInput & {
   category?: DocumentCategory;
   limit: number;
   offset: number;
@@ -50,6 +55,7 @@ export class HealthDocumentsService {
     private readonly db: DatabaseService,
     private readonly storage: StorageService,
     private readonly audit: AuditService,
+    private readonly delegations: DelegationsService,
     private readonly config: ConfigService<Env, true>,
   ) {}
 
@@ -74,21 +80,28 @@ export class HealthDocumentsService {
       });
     }
 
+    const { subjectUserId, viaDelegation } = await resolveSubject(
+      input.actor,
+      input.actingAs,
+      this.delegations,
+    );
+
+    // Direct (non-delegated) uploads remain patient-only; delegates may upload on behalf.
+    if (!viaDelegation && input.actor.role !== 'patient') {
+      throw new CodedException(ErrorCodes.ROLE_NOT_ALLOWED);
+    }
+
     const stored = await this.storage.store({
       buffer: input.buffer,
       mimeType: trueMime,
       originalName: input.originalName,
     });
 
-    if (input.actor.role !== 'patient') {
-      throw new CodedException(ErrorCodes.ROLE_NOT_ALLOWED);
-    }
-
     const [created] = await this.db
       .admin()
       .insert(healthDocuments)
       .values({
-        ownerPatientId: input.actor.id,
+        ownerPatientId: subjectUserId,
         uploadedByUserId: input.actor.id,
         category: input.category,
         title: input.title,
@@ -110,24 +123,36 @@ export class HealthDocumentsService {
       targetId: created.id,
       ipAddress: input.ip,
       userAgent: input.userAgent,
-      metadata: { mime: trueMime, sizeBytes: input.buffer.length, category: input.category },
+      metadata: {
+        mime: trueMime,
+        sizeBytes: input.buffer.length,
+        category: input.category,
+        subjectUserId,
+        viaDelegation,
+      },
     });
 
     return created;
   }
 
   async list(input: ListInput): Promise<{ items: HealthDocument[]; total: number }> {
-    const admin = this.db.admin();
-    const baseFilter = and(
-      eq(healthDocuments.ownerPatientId, input.actor.id),
-      isNull(healthDocuments.deletedAt),
-      input.category ? eq(healthDocuments.category, input.category) : undefined,
+    const { subjectUserId } = await resolveSubject(
+      input.actor,
+      input.actingAs,
+      this.delegations,
     );
 
-    const items = await admin
+    const items = await this.db
+      .admin()
       .select()
       .from(healthDocuments)
-      .where(baseFilter)
+      .where(
+        and(
+          eq(healthDocuments.ownerPatientId, subjectUserId),
+          isNull(healthDocuments.deletedAt),
+          input.category ? eq(healthDocuments.category, input.category) : undefined,
+        ),
+      )
       .orderBy(desc(healthDocuments.createdAt))
       .limit(input.limit)
       .offset(input.offset);
@@ -135,7 +160,63 @@ export class HealthDocumentsService {
     return { items, total: items.length };
   }
 
-  async findOneForActor(id: string, actor: AuthenticatedUser): Promise<HealthDocument> {
+  async view(id: string, opts: CommonInput): Promise<HealthDocument> {
+    const { doc, subjectUserId, viaDelegation } = await this.findOneAuthorized(id, opts);
+    this.audit.log({
+      actorUserId: opts.actor.id,
+      actorRole: opts.actor.role,
+      action: 'document.view',
+      targetType: 'health_document',
+      targetId: doc.id,
+      ipAddress: opts.ip,
+      userAgent: opts.userAgent,
+      metadata: { subjectUserId, viaDelegation },
+    });
+    return doc;
+  }
+
+  async download(
+    id: string,
+    opts: CommonInput,
+  ): Promise<{ doc: HealthDocument; buffer: Buffer }> {
+    const { doc, subjectUserId, viaDelegation } = await this.findOneAuthorized(id, opts);
+    const buffer = await this.storage.read(doc.storageKey);
+    this.audit.log({
+      actorUserId: opts.actor.id,
+      actorRole: opts.actor.role,
+      action: 'document.download',
+      targetType: 'health_document',
+      targetId: doc.id,
+      ipAddress: opts.ip,
+      userAgent: opts.userAgent,
+      metadata: { subjectUserId, viaDelegation },
+    });
+    return { doc, buffer };
+  }
+
+  async softDelete(id: string, opts: CommonInput): Promise<void> {
+    const { doc, subjectUserId, viaDelegation } = await this.findOneAuthorized(id, opts);
+    await this.db
+      .admin()
+      .update(healthDocuments)
+      .set({ deletedAt: new Date() })
+      .where(eq(healthDocuments.id, doc.id));
+    this.audit.log({
+      actorUserId: opts.actor.id,
+      actorRole: opts.actor.role,
+      action: 'document.delete',
+      targetType: 'health_document',
+      targetId: doc.id,
+      ipAddress: opts.ip,
+      userAgent: opts.userAgent,
+      metadata: { subjectUserId, viaDelegation },
+    });
+  }
+
+  private async findOneAuthorized(
+    id: string,
+    opts: CommonInput,
+  ): Promise<{ doc: HealthDocument; subjectUserId: string; viaDelegation: boolean }> {
     const [doc] = await this.db
       .admin()
       .select()
@@ -143,71 +224,16 @@ export class HealthDocumentsService {
       .where(and(eq(healthDocuments.id, id), isNull(healthDocuments.deletedAt)))
       .limit(1);
     if (!doc) throw new CodedException(ErrorCodes.DOCUMENT_NOT_FOUND);
-    if (doc.ownerPatientId !== actor.id) {
-      throw new CodedException(ErrorCodes.DOCUMENT_NOT_FOUND);
+
+    if (doc.ownerPatientId === opts.actor.id) {
+      return { doc, subjectUserId: opts.actor.id, viaDelegation: false };
     }
-    return doc;
-  }
 
-  async view(
-    id: string,
-    actor: AuthenticatedUser,
-    ip?: string,
-    userAgent?: string,
-  ): Promise<HealthDocument> {
-    const doc = await this.findOneForActor(id, actor);
-    this.audit.log({
-      actorUserId: actor.id,
-      actorRole: actor.role,
-      action: 'document.view',
-      targetType: 'health_document',
-      targetId: doc.id,
-      ipAddress: ip,
-      userAgent,
+    // The actor is not the owner: require an active delegation from owner to actor.
+    await this.delegations.requireActiveDelegation({
+      delegator: doc.ownerPatientId,
+      delegate: opts.actor.id,
     });
-    return doc;
-  }
-
-  async download(
-    id: string,
-    actor: AuthenticatedUser,
-    ip?: string,
-    userAgent?: string,
-  ): Promise<{ doc: HealthDocument; buffer: Buffer }> {
-    const doc = await this.findOneForActor(id, actor);
-    const buffer = await this.storage.read(doc.storageKey);
-    this.audit.log({
-      actorUserId: actor.id,
-      actorRole: actor.role,
-      action: 'document.download',
-      targetType: 'health_document',
-      targetId: doc.id,
-      ipAddress: ip,
-      userAgent,
-    });
-    return { doc, buffer };
-  }
-
-  async softDelete(
-    id: string,
-    actor: AuthenticatedUser,
-    ip?: string,
-    userAgent?: string,
-  ): Promise<void> {
-    const doc = await this.findOneForActor(id, actor);
-    await this.db
-      .admin()
-      .update(healthDocuments)
-      .set({ deletedAt: new Date() })
-      .where(eq(healthDocuments.id, doc.id));
-    this.audit.log({
-      actorUserId: actor.id,
-      actorRole: actor.role,
-      action: 'document.delete',
-      targetType: 'health_document',
-      targetId: doc.id,
-      ipAddress: ip,
-      userAgent,
-    });
+    return { doc, subjectUserId: doc.ownerPatientId, viaDelegation: true };
   }
 }

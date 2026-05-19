@@ -159,3 +159,45 @@ psql $DATABASE_URL -c "SELECT polname, polcmd FROM pg_policy WHERE polrelid = 'h
 ```
 
 The new policies should appear on `health_documents`, `delegations`, and `delegation_requests`.
+
+---
+
+## Commit 2 — service, endpoints, cron, acting-as plumbing (2026-05-19)
+
+### What shipped
+
+- **`DelegationsService`** in `src/modules/delegations/delegations.service.ts`. Methods: `createRequest`, `cancelRequest`, `listMyRequests`, `lookupByToken`, `generateInvitationOtp`, `acceptInvitation` (authenticated path), `acceptAndSignup` (anonymous, creates the user account + first delegation in one atomic flow), `rejectInvitation`, `list`, `revoke`, `createSubDelegation`, `expirePastRequests`, `expirePastDelegations`, `requireActiveDelegation`. The last is the helper consumed by the acting-as resolver in `health-documents`.
+- **`NotificationsService`** in `src/modules/notifications/`. Driver-pluggable design mirroring `StorageService`: `ConsoleNotificationDriver` writes to pino in dev; `ResendNotificationDriver` is in the repo as a stub that throws until the production API key + sender are configured. Five templated emails (invitation, OTP, delegation-created, sub-delegation-created, revoked) — Italian text, no HTML for v1.
+- **Three controllers**:
+  - `POST /delegation-requests` (auth) — create an invitation.
+  - `GET /delegation-requests/mine` (auth) — my outgoing + incoming.
+  - `DELETE /delegation-requests/:id` (auth) — cancel my own pending invitation.
+  - `GET /inviti/:token` (public) — invitation summary.
+  - `POST /inviti/:token/otp` (public) — generate and send the OTP to the target email.
+  - `POST /inviti/:token/accept` (auth) — the logged-in target accepts.
+  - `POST /inviti/:token/accept-and-signup` (public) — the target accepts and creates an account in one step.
+  - `POST /inviti/:token/reject` (public) — mark the request rejected.
+  - `GET /delegations?as=delegator|delegate|all` (auth) — list mandates I granted or hold.
+  - `DELETE /delegations/:id` (auth) — revoke. Either party can revoke. The SQL cascade trigger from commit 1 propagates revoke/expiry to children.
+  - `POST /delegations/:parentId/sub-delegate` (auth, doctor) — pre-authorised sub-mandate. Validates `parent.can_sub_delegate=true`, ensures the child's `expires_at` does not exceed the parent's, notifies the data subject with a revoke link.
+- **OTP**: `Math.random`-free. `randomInt` from `node:crypto` for the 6-digit code; sha256 hash stored, `timingSafeEqual` on verify, 10-minute TTL, 5 attempts cap.
+- **Invitation token**: 32-byte URL-safe random, sha256 hash stored, 7-day TTL. The raw token leaves the server only inside the invitation email body.
+- **Acting-as plumbing**. New `@ActingAs()` parameter decorator reads the `X-Acting-As: <userId>` header. New `resolveSubject(actor, actingAs, delegations)` utility validates the active delegation and returns the effective subject. `HealthDocumentsService` now accepts an `actingAs` field on every method; on access, ownership equals the actor or an active delegation is required. Audit log entries gain a `subjectUserId` + `viaDelegation` metadata payload so attribution is clear when a delegate acts on a data owner's record.
+- **`@nestjs/schedule`** registered globally. `DelegationsCronTask` runs at 04:00 UTC every day and marks past-due pending requests as `expired` and past-`expires_at` active delegations as `expired` (cascade trigger handles the rest).
+- **Pino redaction extended** to drop `otp`, `otpHash`, `tokenHash` fields on the way out.
+- **Health-documents controller** no longer gates by `@Roles('patient')` because delegates may legitimately upload on behalf of a patient. The service enforces the rule: actor must be a patient OR hold an active delegation to the subject.
+
+### Trade-offs
+
+- **Service-level checks instead of RLS for tenanted reads** stayed put. We still issue all writes and reads through `db.admin()` and validate ownership/delegation in code. Switching to `db.app()` + `withUser()` would let RLS do the same job, but the test setup needs a real test database to exercise it; we'll flip the switch when CI lands.
+- **Acceptance flow does not re-issue tokens** when the target was already logged in. The accepting user is expected to already hold a valid session (their existing access + refresh tokens). The `accept-and-signup` path does not auto-login either — it returns the new user id and the delegation; the web client should follow with a normal login. This avoids embedding the auth state machine into the delegation flow.
+- **The smoke test patches `otp_hash` and `token_hash` directly** because the OTP and raw token never leave the server in production. A proper e2e using the dev console driver (capturing tokens from log output) is a follow-up.
+- **Resend driver is intentionally not wired**. Flipping `NOTIFICATIONS_DRIVER=resend` will throw on boot until the driver is implemented and credentials are configured. The console driver is sufficient for dev and the smoke test.
+- **No quorum on sub-mandate notifications**. The patient receives the notification email; if they ignore it for 24 hours, nothing changes. Auto-revoke of "unacknowledged" sub-mandates is a possible v1.1 hardening.
+
+### Not in this commit
+
+- Real Resend integration + React Email templates.
+- Per-document audit-log SELECT endpoint for the data owner to see "who looked at what".
+- Doctor "acting as" UI: requires the web work in commit 3.
+- Theme-aware HTML email templates aligned to the design system tokens.

@@ -3,6 +3,7 @@ import { MulterModule } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
 import { HealthDocumentsController } from './health-documents.controller';
 import { HealthDocumentsService } from './health-documents.service';
+import { DelegationsModule } from '../delegations/delegations.module';
 
 @Module({
   imports: [
@@ -10,6 +11,7 @@ import { HealthDocumentsService } from './health-documents.service';
       storage: memoryStorage(),
       limits: { fileSize: 50 * 1024 * 1024 },
     }),
+    DelegationsModule,
   ],
   controllers: [HealthDocumentsController],
   providers: [HealthDocumentsService],
