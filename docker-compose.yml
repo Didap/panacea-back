@@ -1,0 +1,21 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: panacea-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: panacea
+      POSTGRES_USER: panacea_admin
+      POSTGRES_PASSWORD: panacea_admin
+    ports:
+      - '5433:5432'
+    volumes:
+      - panacea_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U panacea_admin -d panacea']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  panacea_db_data:
