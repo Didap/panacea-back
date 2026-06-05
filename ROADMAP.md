@@ -21,10 +21,11 @@ Phases are independent and each ships with tests, a dated work log under `docs/`
 - [x] Refresh token rotation
 - [x] Logout (revoke refresh)
 - [x] /users/me + profile fetch
-- [ ] Email verification (Resend + React Email)
-- [ ] Password reset flow
-- [ ] Account lockout after N failed logins
-- [ ] @Throttle on auth endpoints
+- [x] Email verification (token + email; Resend in prod, console in dev) (2026-06-05, see `docs/identity_hardening_2026-06-05.md`)
+- [x] Password reset flow (token + email, revokes all sessions) (2026-06-05)
+- [x] Account lockout after N failed logins (audit + regression test) (2026-06-05)
+- [x] @Throttle on auth endpoints (skipped under NODE_ENV=test) (2026-06-05)
+- [ ] HTML email templates (React Email); web pages for verify/reset links
 
 ## Phase 2 — Patient health record (in progress, 2026-05-19)
 

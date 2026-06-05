@@ -44,6 +44,14 @@ const envSchema = z.object({
   INVITATION_TTL_DAYS: z.coerce.number().int().positive().default(7),
   OTP_TTL_MINUTES: z.coerce.number().int().positive().default(10),
   OTP_MAX_ATTEMPTS: z.coerce.number().int().positive().default(5),
+
+  EMAIL_VERIFICATION_TTL_HOURS: z.coerce.number().int().positive().default(24),
+  PASSWORD_RESET_TTL_MINUTES: z.coerce.number().int().positive().default(30),
+  // When true, login is refused for accounts whose email is not yet verified.
+  REQUIRE_EMAIL_VERIFICATION: z
+    .string()
+    .default('false')
+    .transform((v) => v === 'true'),
 });
 
 export type Env = z.infer<typeof envSchema>;
