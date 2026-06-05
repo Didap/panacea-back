@@ -41,6 +41,18 @@ export type DelegationRevokedContext = {
   delegateName: string;
 };
 
+export type EmailVerificationContext = {
+  to: string;
+  verificationUrl: string;
+  expiresAt: Date;
+};
+
+export type PasswordResetContext = {
+  to: string;
+  resetUrl: string;
+  expiresAt: Date;
+};
+
 @Injectable()
 export class NotificationsService {
   private readonly publicBaseUrl: string;
@@ -54,6 +66,14 @@ export class NotificationsService {
 
   invitationUrl(rawToken: string): string {
     return `${this.publicBaseUrl}/inviti/${rawToken}`;
+  }
+
+  emailVerificationUrl(rawToken: string): string {
+    return `${this.publicBaseUrl}/verifica-email/${rawToken}`;
+  }
+
+  passwordResetUrl(rawToken: string): string {
+    return `${this.publicBaseUrl}/reset-password/${rawToken}`;
   }
 
   async sendInvitationEmail(ctx: InvitationEmailContext): Promise<void> {
@@ -119,6 +139,32 @@ export class NotificationsService {
       'L\'accesso e\' stato chiuso immediatamente. Nessuna nuova azione puo\' essere compiuta sotto questa delega.',
     ].join('\n');
     await this.send({ to: ctx.to, subject: 'Delega revocata su Panacea', text });
+  }
+
+  async sendEmailVerificationEmail(ctx: EmailVerificationContext): Promise<void> {
+    const text = [
+      'Benvenuto su Panacea. Conferma il tuo indirizzo email per attivare l\'account.',
+      '',
+      'Apri questo link:',
+      ctx.verificationUrl,
+      '',
+      `Il link scade il ${ctx.expiresAt.toISOString()}.`,
+      'Se non hai creato tu un account, ignora questa email.',
+    ].join('\n');
+    await this.send({ to: ctx.to, subject: 'Conferma la tua email su Panacea', text });
+  }
+
+  async sendPasswordResetEmail(ctx: PasswordResetContext): Promise<void> {
+    const text = [
+      'Hai richiesto di reimpostare la password del tuo account Panacea.',
+      '',
+      'Apri questo link per scegliere una nuova password:',
+      ctx.resetUrl,
+      '',
+      `Il link scade il ${ctx.expiresAt.toISOString()}.`,
+      'Se non hai richiesto tu il reset, ignora questa email: la password resta invariata.',
+    ].join('\n');
+    await this.send({ to: ctx.to, subject: 'Reimposta la password di Panacea', text });
   }
 
   private async send(message: NotificationMessage): Promise<void> {

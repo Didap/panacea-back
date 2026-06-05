@@ -43,7 +43,11 @@ import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
         },
       },
     }),
-    ThrottlerModule.forRoot([{ ttl: 60_000, limit: 120 }]),
+    ThrottlerModule.forRoot({
+      throttlers: [{ ttl: 60_000, limit: 120 }],
+      // Rate limits are config, not behaviour under test; skip them so e2e can hammer auth routes.
+      skipIf: () => process.env.NODE_ENV === 'test',
+    }),
     ScheduleModule.forRoot(),
     DatabaseModule,
     StorageModule,

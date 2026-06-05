@@ -6,14 +6,18 @@ import { createHash, randomBytes } from 'node:crypto';
 import { and, eq, isNull } from 'drizzle-orm';
 import { DatabaseService } from '../../database/database.service';
 import {
+  authTokens,
   doctorProfiles,
   patientProfiles,
   refreshTokens,
   users,
+  type AuthToken,
+  type AuthTokenType,
   type UserRole,
 } from '../../database/schema';
 import { CodedException, ErrorCodes } from '../../common/constants/error-codes';
 import { AuditService } from '../audit/audit.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import type { Env } from '../../config/env';
 import { RegisterDto } from './dto/register.dto';
 
@@ -31,6 +35,7 @@ export class AuthService {
     private readonly jwt: JwtService,
     private readonly config: ConfigService<Env, true>,
     private readonly audit: AuditService,
+    private readonly notifications: NotificationsService,
   ) {}
 
   async register(dto: RegisterDto, ip?: string, userAgent?: string): Promise<Tokens> {
@@ -81,6 +86,15 @@ export class AuthService {
       userAgent,
     });
 
+    // Email delivery is best-effort: a transient failure must not lose the registration.
+    await this.issueAndSendVerification(created.id, created.email).catch((err: unknown) => {
+      this.audit.log({
+        actorUserId: created.id,
+        action: 'auth.email.verification.sent',
+        metadata: { delivered: false, error: String(err) },
+      });
+    });
+
     return this.issueTokens(created.id, created.email, created.role, ip, userAgent);
   }
 
@@ -119,6 +133,11 @@ export class AuthService {
         userAgent,
       });
       throw new CodedException(ErrorCodes.INVALID_CREDENTIALS);
+    }
+
+    // Only valid credentials reveal the unverified state, so this is not an enumeration vector.
+    if (this.config.get('REQUIRE_EMAIL_VERIFICATION', { infer: true }) && !user.emailVerifiedAt) {
+      throw new CodedException(ErrorCodes.EMAIL_NOT_VERIFIED);
     }
 
     if (user.failedLoginAttempts > 0 || user.lockedUntil) {
@@ -232,10 +251,131 @@ export class AuthService {
     const next = current + 1;
     const update: Partial<typeof users.$inferInsert> = { failedLoginAttempts: next };
     if (next >= maxAttempts) {
-      update.lockedUntil = new Date(Date.now() + lockoutMin * 60_000);
+      const until = new Date(Date.now() + lockoutMin * 60_000);
+      update.lockedUntil = until;
       update.failedLoginAttempts = 0;
+      this.audit.log({
+        actorUserId: userId,
+        action: 'auth.account.locked',
+        metadata: { until: until.toISOString() },
+      });
     }
     await this.db.admin().update(users).set(update).where(eq(users.id, userId));
+  }
+
+  // ---------- email verification + password reset ----------
+
+  async verifyEmail(rawToken: string): Promise<void> {
+    const token = await this.consumeAuthToken(rawToken, 'email_verification');
+    const admin = this.db.admin();
+    const [user] = await admin
+      .select({ id: users.id, role: users.role, emailVerifiedAt: users.emailVerifiedAt })
+      .from(users)
+      .where(eq(users.id, token.userId))
+      .limit(1);
+    if (!user) throw new CodedException(ErrorCodes.AUTH_TOKEN_INVALID);
+    if (user.emailVerifiedAt) throw new CodedException(ErrorCodes.EMAIL_ALREADY_VERIFIED);
+
+    await admin.update(users).set({ emailVerifiedAt: new Date() }).where(eq(users.id, user.id));
+    this.audit.log({ actorUserId: user.id, actorRole: user.role, action: 'auth.email.verified' });
+  }
+
+  async resendVerification(email: string): Promise<void> {
+    const [user] = await this.db
+      .admin()
+      .select({ id: users.id, email: users.email, emailVerifiedAt: users.emailVerifiedAt })
+      .from(users)
+      .where(and(eq(users.email, email.toLowerCase()), isNull(users.deletedAt)))
+      .limit(1);
+    // Silent no-op for unknown or already-verified accounts (no account-enumeration signal).
+    if (!user || user.emailVerifiedAt) return;
+    await this.issueAndSendVerification(user.id, user.email);
+  }
+
+  async requestPasswordReset(email: string, ip?: string, userAgent?: string): Promise<void> {
+    const [user] = await this.db
+      .admin()
+      .select({ id: users.id, email: users.email })
+      .from(users)
+      .where(and(eq(users.email, email.toLowerCase()), isNull(users.deletedAt)))
+      .limit(1);
+    if (!user) return; // always 202 to the caller; no enumeration signal
+
+    const raw = await this.issueAuthToken(user.id, 'password_reset');
+    const ttlMinutes = this.config.get('PASSWORD_RESET_TTL_MINUTES', { infer: true });
+    await this.notifications.sendPasswordResetEmail({
+      to: user.email,
+      resetUrl: this.notifications.passwordResetUrl(raw),
+      expiresAt: new Date(Date.now() + ttlMinutes * 60_000),
+    });
+    this.audit.log({
+      actorUserId: user.id,
+      action: 'auth.password.reset.requested',
+      ipAddress: ip,
+      userAgent,
+    });
+  }
+
+  async resetPassword(rawToken: string, newPassword: string): Promise<void> {
+    const token = await this.consumeAuthToken(rawToken, 'password_reset');
+    const passwordHash = await argon2.hash(newPassword, { type: argon2.argon2id });
+    const admin = this.db.admin();
+
+    await admin
+      .update(users)
+      .set({ passwordHash, failedLoginAttempts: 0, lockedUntil: null })
+      .where(eq(users.id, token.userId));
+
+    // Reset invalidates every existing session.
+    await admin
+      .update(refreshTokens)
+      .set({ revokedAt: new Date() })
+      .where(and(eq(refreshTokens.userId, token.userId), isNull(refreshTokens.revokedAt)));
+
+    this.audit.log({ actorUserId: token.userId, action: 'auth.password.reset.completed' });
+  }
+
+  private async issueAndSendVerification(userId: string, email: string): Promise<void> {
+    const raw = await this.issueAuthToken(userId, 'email_verification');
+    const ttlHours = this.config.get('EMAIL_VERIFICATION_TTL_HOURS', { infer: true });
+    await this.notifications.sendEmailVerificationEmail({
+      to: email,
+      verificationUrl: this.notifications.emailVerificationUrl(raw),
+      expiresAt: new Date(Date.now() + ttlHours * 3_600_000),
+    });
+    this.audit.log({ actorUserId: userId, action: 'auth.email.verification.sent' });
+  }
+
+  private async issueAuthToken(userId: string, type: AuthTokenType): Promise<string> {
+    const raw = randomBytes(32).toString('base64url');
+    const ttlMs =
+      type === 'email_verification'
+        ? this.config.get('EMAIL_VERIFICATION_TTL_HOURS', { infer: true }) * 3_600_000
+        : this.config.get('PASSWORD_RESET_TTL_MINUTES', { infer: true }) * 60_000;
+    await this.db.admin().insert(authTokens).values({
+      userId,
+      type,
+      tokenHash: sha256(raw),
+      expiresAt: new Date(Date.now() + ttlMs),
+    });
+    return raw;
+  }
+
+  private async consumeAuthToken(rawToken: string, type: AuthTokenType): Promise<AuthToken> {
+    const admin = this.db.admin();
+    const [token] = await admin
+      .select()
+      .from(authTokens)
+      .where(eq(authTokens.tokenHash, sha256(rawToken)))
+      .limit(1);
+    if (!token || token.type !== type || token.usedAt) {
+      throw new CodedException(ErrorCodes.AUTH_TOKEN_INVALID);
+    }
+    if (token.expiresAt < new Date()) {
+      throw new CodedException(ErrorCodes.AUTH_TOKEN_EXPIRED);
+    }
+    await admin.update(authTokens).set({ usedAt: new Date() }).where(eq(authTokens.id, token.id));
+    return token;
   }
 }
 
