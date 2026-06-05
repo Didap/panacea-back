@@ -1,0 +1,69 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: panacea
+          POSTGRES_USER: panacea_admin
+          POSTGRES_PASSWORD: panacea_admin
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U panacea_admin -d panacea"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      NODE_ENV: test
+      DATABASE_URL: postgres://panacea_admin:panacea_admin@localhost:5432/panacea
+      DATABASE_APP_USER: panacea_app
+      DATABASE_APP_PASSWORD: panacea_app
+      JWT_ACCESS_SECRET: ci_access_secret_at_least_32_characters_long
+      JWT_REFRESH_SECRET: ci_refresh_secret_at_least_32_characters_long
+      PUBLIC_WEB_BASE_URL: http://localhost:5173
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build
+        run: npm run build
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Run migrations
+        run: npm run db:migrate
+
+      - name: E2E tests
+        run: npm run test:e2e
