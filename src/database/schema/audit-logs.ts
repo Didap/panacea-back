@@ -11,6 +11,8 @@ export const auditActions = [
   'auth.password.reset.requested',
   'auth.password.reset.completed',
   'auth.account.locked',
+  'user.data_exported',
+  'user.account_deleted',
   'document.upload',
   'document.view',
   'document.download',
