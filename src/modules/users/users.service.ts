@@ -4,6 +4,7 @@ import { and, desc, eq, isNull, or } from 'drizzle-orm';
 import { DatabaseService } from '../../database/database.service';
 import {
   auditLogs,
+  authTokens,
   delegationRequests,
   delegations,
   doctorProfiles,
@@ -131,6 +132,12 @@ export class UsersService {
       action: 'user.data_exported',
       ipAddress: meta.ip,
       userAgent: meta.userAgent,
+      metadata: {
+        documents: documents.length,
+        delegations: dels.length,
+        requests: reqs.length,
+        auditEntries: auditLog.length,
+      },
     });
 
     return {
@@ -148,23 +155,26 @@ export class UsersService {
   // frees the email for re-registration (partial unique index) and closes every session and mandate.
   async deleteAccount(userId: string, password: string, meta: ActorMeta = {}): Promise<void> {
     const admin = this.db.admin();
-    const [user] = await admin
-      .select()
-      .from(users)
-      .where(and(eq(users.id, userId), isNull(users.deletedAt)))
-      .limit(1);
+    const [user] = await admin.select().from(users).where(eq(users.id, userId)).limit(1);
     if (!user) throw new CodedException(ErrorCodes.USER_NOT_FOUND);
+    // Idempotent: a repeat delete within the access-token window is a no-op, not a 404.
+    if (user.deletedAt) return;
 
     const ok = await argon2.verify(user.passwordHash, password).catch(() => false);
     if (!ok) throw new CodedException(ErrorCodes.INVALID_CREDENTIALS);
 
     const now = new Date();
     await admin.update(users).set({ deletedAt: now }).where(eq(users.id, userId));
-    await admin
+
+    const sessions = await admin
       .update(refreshTokens)
       .set({ revokedAt: now })
-      .where(and(eq(refreshTokens.userId, userId), isNull(refreshTokens.revokedAt)));
-    await admin
+      .where(and(eq(refreshTokens.userId, userId), isNull(refreshTokens.revokedAt)))
+      .returning({ id: refreshTokens.id });
+
+    // Revoking the primary mandate also revokes its sub-delegations via the
+    // trg_delegations_cascade_revoke trigger (0003), so the chain of authority is fully cut.
+    const mandates = await admin
       .update(delegations)
       .set({
         status: 'revoked',
@@ -177,8 +187,10 @@ export class UsersService {
           eq(delegations.status, 'active'),
           or(eq(delegations.delegatorUserId, userId), eq(delegations.delegateUserId, userId)),
         ),
-      );
-    await admin
+      )
+      .returning({ id: delegations.id });
+
+    const requests = await admin
       .update(delegationRequests)
       .set({ status: 'cancelled', cancelledAt: now })
       .where(
@@ -186,11 +198,20 @@ export class UsersService {
           eq(delegationRequests.requestingUserId, userId),
           eq(delegationRequests.status, 'pending'),
         ),
-      );
-    await admin
+      )
+      .returning({ id: delegationRequests.id });
+
+    const documents = await admin
       .update(healthDocuments)
       .set({ deletedAt: now })
-      .where(and(eq(healthDocuments.ownerPatientId, userId), isNull(healthDocuments.deletedAt)));
+      .where(and(eq(healthDocuments.ownerPatientId, userId), isNull(healthDocuments.deletedAt)))
+      .returning({ id: healthDocuments.id });
+
+    // Burn any live verification / reset tokens so a tombstoned account cannot be acted on.
+    await admin
+      .update(authTokens)
+      .set({ usedAt: now })
+      .where(and(eq(authTokens.userId, userId), isNull(authTokens.usedAt)));
 
     this.audit.log({
       actorUserId: userId,
@@ -198,6 +219,12 @@ export class UsersService {
       action: 'user.account_deleted',
       ipAddress: meta.ip,
       userAgent: meta.userAgent,
+      metadata: {
+        revokedSessions: sessions.length,
+        revokedDelegations: mandates.length,
+        cancelledRequests: requests.length,
+        deletedDocuments: documents.length,
+      },
     });
   }
 

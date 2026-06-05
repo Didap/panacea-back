@@ -95,6 +95,7 @@ describe('Users GDPR e2e (export + account deletion)', () => {
     expect(res.body.profile.fiscalCode).toBe(FISCAL_A);
     expect(res.body.documents).toHaveLength(1);
     expect(res.body.documents[0].title).toBe('Referto demo');
+    expect(res.body.documents[0].storageKey).toBeUndefined();
     expect(res.body.delegations).toHaveLength(1);
     expect(res.body.delegationRequests).toHaveLength(1);
 
@@ -120,6 +121,7 @@ describe('Users GDPR e2e (export + account deletion)', () => {
       .delete('/api/v1/users/me')
       .set('Authorization', `Bearer ${c.body.accessToken}`)
       .send({ password: 'not-my-password' });
+    expect(wrong.status).toBe(401);
     expect(wrong.body.code).toBe('INVALID_CREDENTIALS');
 
     const del = await request(app.getHttpServer())
@@ -151,5 +153,48 @@ describe('Users GDPR e2e (export + account deletion)', () => {
     // The email is freed: re-registration succeeds.
     const reReg = await register('gdpr-c@test.local', FISCAL_A);
     expect(reReg.status).toBe(201);
+
+    // A repeat delete on the same (now soft-deleted) account is an idempotent no-op, not a 404.
+    const del2 = await request(app.getHttpServer())
+      .delete('/api/v1/users/me')
+      .set('Authorization', `Bearer ${c.body.accessToken}`)
+      .send({ password: PASSWORD });
+    expect(del2.status).toBe(204);
+  });
+
+  it('deleting a delegate cascades the revoke to their sub-delegations', async () => {
+    const patient = await register('cascade-p@test.local', FISCAL_A);
+    const anna = await register('cascade-anna@test.local', FISCAL_B);
+    await register('cascade-paolo@test.local', 'VRDGLI92D55F205K');
+    const pId = await userId('cascade-p@test.local');
+    const annaId = await userId('cascade-anna@test.local');
+    const paoloId = await userId('cascade-paolo@test.local');
+    void patient;
+
+    // patient -> Anna (sub-delegatable), then Anna's sub-delegation to Paolo
+    // (child: delegator = patient, delegate = Paolo, parent = the patient->Anna mandate).
+    const parent = await pool.query<{ id: string }>(
+      `INSERT INTO delegations (delegator_user_id, delegate_user_id, scope, status, can_sub_delegate)
+       VALUES ($1, $2, 'full', 'active', true) RETURNING id`,
+      [pId, annaId],
+    );
+    await pool.query(
+      `INSERT INTO delegations (delegator_user_id, delegate_user_id, parent_delegation_id, scope, status)
+       VALUES ($1, $2, $3, 'full', 'active')`,
+      [pId, paoloId, parent.rows[0].id],
+    );
+
+    const del = await request(app.getHttpServer())
+      .delete('/api/v1/users/me')
+      .set('Authorization', `Bearer ${anna.body.accessToken}`)
+      .send({ password: PASSWORD });
+    expect(del.status).toBe(204);
+
+    // Anna's primary mandate is revoked; the DB cascade trigger revokes Paolo's child too.
+    const child = await pool.query<{ status: string }>(
+      'SELECT status FROM delegations WHERE delegate_user_id = $1',
+      [paoloId],
+    );
+    expect(child.rows[0].status).toBe('revoked');
   });
 });

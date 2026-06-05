@@ -29,9 +29,16 @@ hard-deleted per the project rule):
 - every outstanding refresh token is revoked (sessions end; `/auth/refresh` then returns
   `REFRESH_TOKEN_REVOKED`).
 - active mandates the user is a party to (delegator or delegate) are revoked
-  (`revocation_reason = 'account_deleted'`); pending requests the user sent are cancelled.
+  (`revocation_reason = 'account_deleted'`); their sub-delegation children cascade to revoked via the
+  `trg_delegations_cascade_revoke` trigger (0003), so the chain of authority is fully cut even when a
+  delegate who sub-delegated is the one deleting.
+- pending requests the user sent are cancelled; live verification / reset `auth_tokens` are burned.
 - owned health documents are soft-deleted.
-- audited as `user.account_deleted`.
+- audited as `user.account_deleted` with metadata counts (revoked sessions / mandates, cancelled
+  requests, soft-deleted documents) so the erasure scope is reconstructable; the export is audited
+  with its own counts.
+
+A repeat `DELETE` on an already-soft-deleted account is an idempotent 204 no-op (not a 404).
 
 ## Known limitation
 
@@ -40,6 +47,11 @@ token stays valid until it expires (~15 min). Their refresh tokens are revoked, 
 deletion is effectively complete within the short access TTL. Making it instant would require a DB
 check on every authenticated request, which the project deliberately avoids for now.
 
+Within that window the deleted user can still call `GET /me/data-export` (allowed deliberately - it
+only returns their own, now-tombstoned data, consistent with the Art. 15 access right) and can repeat
+`DELETE /me` (idempotent no-op). They cannot do anything else useful: refresh is revoked and the
+mandates are gone.
+
 ## Tests
 
 `test/users-gdpr.e2e-spec.ts`: export returns the user's data with no `passwordHash` and no
@@ -47,7 +59,11 @@ token/otp hashes on the requests; delete rejects a wrong password, soft-deletes 
 mandate, kills the refresh token, and frees the email for re-registration. Full e2e: 5 suites, 15
 tests green.
 
-## Follow-up
+## Follow-ups
 
-A web "Account" page with "Esporta i miei dati" and "Elimina account" (with password confirmation)
-to surface these in the UI.
+- A web "Account" page with "Esporta i miei dati" and "Elimina account" (with password confirmation)
+  to surface these in the UI.
+- Policy decision (raised in review): whether the two GDPR audit writes should be synchronous /
+  awaited rather than fire-and-forget, so a dropped audit insert fails the request instead of leaving
+  a legally-required erasure with no provable record. Left fire-and-forget for now (the family rule is
+  "never block the response"); flagging for a deliberate call.
