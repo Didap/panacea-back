@@ -15,12 +15,13 @@ pool, like the invitation token lookup.
 
 - Register now issues an email-verification token and sends the email best-effort (a delivery failure
   is audited but never loses the registration).
-- `verifyEmail(token)`: consumes the token, sets `users.email_verified_at`. Single-use; replays and
-  bad tokens return `AUTH_TOKEN_INVALID`, expired ones `AUTH_TOKEN_EXPIRED`, already-verified
-  `EMAIL_ALREADY_VERIFIED`.
-- `resendVerification(email)`: silent no-op for unknown/already-verified accounts (no enumeration).
-- `requestPasswordReset(email)`: always returns 202; issues a token + email only when the account
-  exists.
+- `verifyEmail(token)`: consumes the token, sets `users.email_verified_at`. Single-use via an atomic
+  conditional claim (`UPDATE ... WHERE id = ? AND used_at IS NULL`, zero rows -> invalid), so
+  concurrent submits cannot both win. Bad/replayed tokens return `AUTH_TOKEN_INVALID`, expired
+  `AUTH_TOKEN_EXPIRED`, already-verified `EMAIL_ALREADY_VERIFIED`.
+- `resendVerification(email)` / `requestPasswordReset(email)`: non-enumerating in both the status
+  line (silent no-op / always-202) and response timing - the token row is written synchronously but
+  the email send is fire-and-forget, so the latency does not reveal whether the account exists.
 - `resetPassword(token, password)`: argon2-rehash, clears the lockout counters, and revokes every
   outstanding refresh token (reset invalidates all sessions).
 - Login optionally refuses unverified accounts when `REQUIRE_EMAIL_VERIFICATION=true` (checked only
@@ -47,6 +48,12 @@ exercise lockout and the auth flows without tripping the limiter.
 single-use and rejects bad/replayed/expired tokens; lockout after N failed logins; password reset
 revokes old sessions and swaps the accepted credentials; forgot-password is a 202 no-op for unknown
 emails (no enumeration). Full e2e: 4 suites, 13 tests green.
+
+## Deploy-gate note
+
+`@Throttle` keys requests by client IP. Before prod, confirm Express `trust proxy` and the
+real-client-IP path match the deployment's proxy, otherwise every request collapses into one bucket
+(bypass or self-DoS). No code change needed in this PR.
 
 ## Not done here (follow-ups)
 

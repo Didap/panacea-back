@@ -86,14 +86,18 @@ export class AuthService {
       userAgent,
     });
 
-    // Email delivery is best-effort: a transient failure must not lose the registration.
-    await this.issueAndSendVerification(created.id, created.email).catch((err: unknown) => {
+    // Verification setup is best-effort: a failure must not lose the registration.
+    try {
+      const verificationToken = await this.issueAuthToken(created.id, 'email_verification');
+      this.queueVerificationEmail(created.email, verificationToken);
+      this.audit.log({ actorUserId: created.id, action: 'auth.email.verification.sent' });
+    } catch (err) {
       this.audit.log({
         actorUserId: created.id,
         action: 'auth.email.verification.sent',
         metadata: { delivered: false, error: String(err) },
       });
-    });
+    }
 
     return this.issueTokens(created.id, created.email, created.role, ip, userAgent);
   }
@@ -289,7 +293,9 @@ export class AuthService {
       .limit(1);
     // Silent no-op for unknown or already-verified accounts (no account-enumeration signal).
     if (!user || user.emailVerifiedAt) return;
-    await this.issueAndSendVerification(user.id, user.email);
+    const raw = await this.issueAuthToken(user.id, 'email_verification');
+    this.queueVerificationEmail(user.email, raw);
+    this.audit.log({ actorUserId: user.id, action: 'auth.email.verification.sent' });
   }
 
   async requestPasswordReset(email: string, ip?: string, userAgent?: string): Promise<void> {
@@ -302,12 +308,7 @@ export class AuthService {
     if (!user) return; // always 202 to the caller; no enumeration signal
 
     const raw = await this.issueAuthToken(user.id, 'password_reset');
-    const ttlMinutes = this.config.get('PASSWORD_RESET_TTL_MINUTES', { infer: true });
-    await this.notifications.sendPasswordResetEmail({
-      to: user.email,
-      resetUrl: this.notifications.passwordResetUrl(raw),
-      expiresAt: new Date(Date.now() + ttlMinutes * 60_000),
-    });
+    this.queuePasswordResetEmail(user.email, raw);
     this.audit.log({
       actorUserId: user.id,
       action: 'auth.password.reset.requested',
@@ -335,15 +336,28 @@ export class AuthService {
     this.audit.log({ actorUserId: token.userId, action: 'auth.password.reset.completed' });
   }
 
-  private async issueAndSendVerification(userId: string, email: string): Promise<void> {
-    const raw = await this.issueAuthToken(userId, 'email_verification');
+  // Fire-and-forget so the response time never depends on whether the account exists. The token row
+  // itself is created synchronously by the caller (issueAuthToken) before these run.
+  private queueVerificationEmail(email: string, rawToken: string): void {
     const ttlHours = this.config.get('EMAIL_VERIFICATION_TTL_HOURS', { infer: true });
-    await this.notifications.sendEmailVerificationEmail({
-      to: email,
-      verificationUrl: this.notifications.emailVerificationUrl(raw),
-      expiresAt: new Date(Date.now() + ttlHours * 3_600_000),
-    });
-    this.audit.log({ actorUserId: userId, action: 'auth.email.verification.sent' });
+    void this.notifications
+      .sendEmailVerificationEmail({
+        to: email,
+        verificationUrl: this.notifications.emailVerificationUrl(rawToken),
+        expiresAt: new Date(Date.now() + ttlHours * 3_600_000),
+      })
+      .catch(() => undefined);
+  }
+
+  private queuePasswordResetEmail(email: string, rawToken: string): void {
+    const ttlMinutes = this.config.get('PASSWORD_RESET_TTL_MINUTES', { infer: true });
+    void this.notifications
+      .sendPasswordResetEmail({
+        to: email,
+        resetUrl: this.notifications.passwordResetUrl(rawToken),
+        expiresAt: new Date(Date.now() + ttlMinutes * 60_000),
+      })
+      .catch(() => undefined);
   }
 
   private async issueAuthToken(userId: string, type: AuthTokenType): Promise<string> {
@@ -368,13 +382,22 @@ export class AuthService {
       .from(authTokens)
       .where(eq(authTokens.tokenHash, sha256(rawToken)))
       .limit(1);
-    if (!token || token.type !== type || token.usedAt) {
+    if (!token || token.type !== type) {
       throw new CodedException(ErrorCodes.AUTH_TOKEN_INVALID);
     }
     if (token.expiresAt < new Date()) {
       throw new CodedException(ErrorCodes.AUTH_TOKEN_EXPIRED);
     }
-    await admin.update(authTokens).set({ usedAt: new Date() }).where(eq(authTokens.id, token.id));
+    // Atomically claim the token: the used_at IS NULL guard lets only one concurrent request win,
+    // closing the check-then-act race for single-use reset/verification tokens.
+    const claimed = await admin
+      .update(authTokens)
+      .set({ usedAt: new Date() })
+      .where(and(eq(authTokens.id, token.id), isNull(authTokens.usedAt)))
+      .returning({ id: authTokens.id });
+    if (claimed.length === 0) {
+      throw new CodedException(ErrorCodes.AUTH_TOKEN_INVALID);
+    }
     return token;
   }
 }
