@@ -76,4 +76,4 @@ Implementation roadmap:
 - [ ] Resend transactional email
 - [ ] Prometheus /metrics (parity with Cityfix)
 - [ ] @nestjs/throttler global + per-endpoint
-- [ ] GDPR endpoints: DELETE /users/me, GET /users/me/data-export
+- [x] GDPR endpoints: `GET /users/me/data-export` (Art. 15/20) + `DELETE /users/me` (Art. 17, soft-delete cascade, password-confirmed) (2026-06-05, see `docs/gdpr_endpoints_2026-06-05.md`)
