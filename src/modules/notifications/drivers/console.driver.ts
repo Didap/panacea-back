@@ -6,10 +6,11 @@ export class ConsoleNotificationDriver implements NotificationDriver {
 
   constructor(private readonly logger: Logger) {}
 
-  async send(message: NotificationMessage): Promise<void> {
+  send(message: NotificationMessage): Promise<void> {
     this.logger.log(
       { to: message.to, subject: message.subject },
       `[notification] ${message.subject}\n${message.text}`,
     );
+    return Promise.resolve();
   }
 }

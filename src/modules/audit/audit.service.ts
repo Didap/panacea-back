@@ -24,7 +24,7 @@ export class AuditService {
   ) {}
 
   log(entry: AuditEntry): void {
-    this.persist(entry).catch((err) => {
+    this.persist(entry).catch((err: unknown) => {
       this.logger.error({ err, audit: entry }, 'audit log write failed');
     });
   }

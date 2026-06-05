@@ -3,9 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { StorageService } from './storage.service';
 import { LocalStorageDriver } from './local-storage.driver';
 import type { Env } from '../../config/env';
-import type { StorageDriver } from './storage.driver';
-
-export const STORAGE_DRIVER_TOKEN = Symbol('STORAGE_DRIVER');
+import { STORAGE_DRIVER_TOKEN, type StorageDriver } from './storage.driver';
 
 @Global()
 @Module({

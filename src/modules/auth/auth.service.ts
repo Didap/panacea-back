@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { JwtService } from '@nestjs/jwt';
+import { JwtService, type JwtSignOptions } from '@nestjs/jwt';
 import * as argon2 from 'argon2';
 import { createHash, randomBytes } from 'node:crypto';
 import { and, eq, isNull } from 'drizzle-orm';
@@ -81,7 +81,7 @@ export class AuthService {
       userAgent,
     });
 
-    return this.issueTokens(created.id, created.email, created.role as UserRole, ip, userAgent);
+    return this.issueTokens(created.id, created.email, created.role, ip, userAgent);
   }
 
   async login(
@@ -136,7 +136,7 @@ export class AuthService {
       userAgent,
     });
 
-    return this.issueTokens(user.id, user.email, user.role as UserRole, ip, userAgent);
+    return this.issueTokens(user.id, user.email, user.role, ip, userAgent);
   }
 
   async refresh(rawToken: string, ip?: string, userAgent?: string): Promise<Tokens> {
@@ -169,7 +169,7 @@ export class AuthService {
       userAgent,
     });
 
-    return this.issueTokens(user.id, user.email, user.role as UserRole, ip, userAgent);
+    return this.issueTokens(user.id, user.email, user.role, ip, userAgent);
   }
 
   async logout(userId: string, rawToken: string | undefined): Promise<void> {
@@ -203,7 +203,8 @@ export class AuthService {
 
     const accessToken = await this.jwt.signAsync(
       { sub: userId, email, role },
-      { secret: accessSecret, expiresIn: accessTtl },
+      // env schema validates the duration format, so the cast to the jwt expiry type is safe
+      { secret: accessSecret, expiresIn: accessTtl as JwtSignOptions['expiresIn'] },
     );
 
     const refreshRaw = randomBytes(48).toString('base64url');
