@@ -1,4 +1,13 @@
-import { pgTable, uuid, varchar, text, timestamp, integer, index } from 'drizzle-orm/pg-core';
+import {
+  pgTable,
+  uuid,
+  varchar,
+  text,
+  timestamp,
+  integer,
+  index,
+  uniqueIndex,
+} from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
 
 export const userRoles = ['patient', 'doctor', 'institution_admin'] as const;
@@ -19,7 +28,7 @@ export const users = pgTable(
     deletedAt: timestamp('deleted_at', { withTimezone: true }),
   },
   (t) => [
-    index('users_email_active_uq').on(t.email).where(sql`${t.deletedAt} IS NULL`),
+    uniqueIndex('users_email_active_uq').on(t.email).where(sql`${t.deletedAt} IS NULL`),
     index('users_role_idx').on(t.role),
   ],
 );

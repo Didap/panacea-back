@@ -1,4 +1,4 @@
-# Backend health pass — 2026-06-05
+# Backend health pass - 2026-06-05
 
 The repo did not build, typecheck, or run its e2e suite on a fresh `git clone && npm install`.
 Several pre-existing problems had accumulated because the suite had never been run green against

@@ -1,4 +1,4 @@
-# Delegations list enrichment — 2026-06-05
+# Delegations list enrichment - 2026-06-05
 
 Prerequisite for the web deleghe UI (Phase 3, commit 3/3). The web mandate list and the
 "Operi per conto di {Nome}" banner need the counterparty's display name, email, and role, but

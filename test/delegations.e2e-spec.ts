@@ -184,4 +184,64 @@ describe('Delegations e2e (citizen-to-citizen)', () => {
       .send({ otp: correct });
     expect(sixth.body.code).toBe('OTP_TOO_MANY_ATTEMPTS');
   });
+
+  it('enriches /mine with names and never leaks token/otp hashes', async () => {
+    const requester = await register('figlia3@test.local', FISCAL_REQUESTER, 'Figlia', 'Rossi');
+    const target = await register('nonna3@test.local', FISCAL_TARGET, 'Nonna', 'Bianchi');
+
+    // Request 1: the target already has an account.
+    await request(app.getHttpServer())
+      .post('/api/v1/delegation-requests')
+      .set('Authorization', `Bearer ${requester.accessToken}`)
+      .send({ targetEmail: 'nonna3@test.local', targetFiscalCode: FISCAL_TARGET });
+
+    // Request 2: the target has no account yet (targetName must come back null).
+    await request(app.getHttpServer())
+      .post('/api/v1/delegation-requests')
+      .set('Authorization', `Bearer ${requester.accessToken}`)
+      .send({ targetEmail: 'futuro@test.local', targetFiscalCode: 'VRDLGI90C15F205Y' });
+
+    // Simulate an OTP having been issued on the request the target can see.
+    await pool.query(
+      `UPDATE delegation_requests
+       SET otp_hash = 'deadbeefdeadbeef', otp_expires_at = now() + interval '10 minutes'
+       WHERE target_email = 'nonna3@test.local'`,
+    );
+
+    const mine = await request(app.getHttpServer())
+      .get('/api/v1/delegation-requests/mine')
+      .set('Authorization', `Bearer ${requester.accessToken}`);
+    expect(mine.status).toBe(200);
+    expect(mine.body).toHaveLength(2);
+
+    type MineRow = { targetEmail: string; requesterName: string; targetName: string | null };
+    const rows = mine.body as MineRow[];
+    const existing = rows.find((r) => r.targetEmail === 'nonna3@test.local');
+    const noAccount = rows.find((r) => r.targetEmail === 'futuro@test.local');
+    expect(existing?.requesterName).toBe('Figlia Rossi');
+    expect(existing?.targetName).toBe('Nonna Bianchi');
+    expect(noAccount?.targetName).toBeNull();
+
+    // No secret column may reach the wire, for either party.
+    for (const row of mine.body) {
+      expect(row.tokenHash).toBeUndefined();
+      expect(row.otpHash).toBeUndefined();
+      expect(row.otpExpiresAt).toBeUndefined();
+      expect(row.otpAttempts).toBeUndefined();
+    }
+
+    // The gated target must not receive the OTP hash for the invite they have not accepted.
+    const targetMine = await request(app.getHttpServer())
+      .get('/api/v1/delegation-requests/mine')
+      .set('Authorization', `Bearer ${target.accessToken}`);
+    expect(targetMine.status).toBe(200);
+    const asTarget = (targetMine.body as MineRow[]).find(
+      (r) => r.targetEmail === 'nonna3@test.local',
+    );
+    expect(asTarget).toBeDefined();
+    for (const row of targetMine.body) {
+      expect(row.otpHash).toBeUndefined();
+      expect(row.tokenHash).toBeUndefined();
+    }
+  });
 });

@@ -50,7 +50,12 @@ export type DelegationView = Delegation & {
   delegate: PartySummary;
 };
 
-export type DelegationRequestView = DelegationRequest & {
+// Wire shape for /delegation-requests/mine: never expose the token/otp hashes (the target of a
+// pending invite is in the result set, and leaking otpHash defeats the OTP second factor).
+export type DelegationRequestView = Omit<
+  DelegationRequest,
+  'tokenHash' | 'otpHash' | 'otpExpiresAt' | 'otpAttempts'
+> & {
   requesterName: string;
   targetName: string | null;
 };
@@ -205,7 +210,24 @@ export class DelegationsService {
     );
 
     return rows.map((r) => ({
-      ...r,
+      id: r.id,
+      requestingUserId: r.requestingUserId,
+      targetEmail: r.targetEmail,
+      targetFiscalCode: r.targetFiscalCode,
+      targetUserId: r.targetUserId,
+      parentDelegationId: r.parentDelegationId,
+      requestedScope: r.requestedScope,
+      requestedExpiresAt: r.requestedExpiresAt,
+      requestCanSubDelegate: r.requestCanSubDelegate,
+      reason: r.reason,
+      status: r.status,
+      expiresAt: r.expiresAt,
+      sentAt: r.sentAt,
+      acceptedAt: r.acceptedAt,
+      rejectedAt: r.rejectedAt,
+      cancelledAt: r.cancelledAt,
+      createdAt: r.createdAt,
+      updatedAt: r.updatedAt,
       requesterName: names.get(r.requestingUserId) ?? 'Utente Panacea',
       targetName: r.targetUserId ? (names.get(r.targetUserId) ?? null) : null,
     }));
