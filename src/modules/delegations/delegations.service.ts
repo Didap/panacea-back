@@ -38,6 +38,23 @@ export type InvitationSummary = {
   status: DelegationRequest['status'];
 };
 
+export type PartySummary = {
+  id: string;
+  name: string;
+  email: string;
+  role: 'patient' | 'doctor' | 'institution_admin';
+};
+
+export type DelegationView = Delegation & {
+  delegator: PartySummary;
+  delegate: PartySummary;
+};
+
+export type DelegationRequestView = DelegationRequest & {
+  requesterName: string;
+  targetName: string | null;
+};
+
 type ActorOpts = { actor: AuthenticatedUser; ip?: string; userAgent?: string };
 
 @Injectable()
@@ -162,8 +179,8 @@ export class DelegationsService {
     });
   }
 
-  async listMyRequests(actor: AuthenticatedUser): Promise<DelegationRequest[]> {
-    return this.db
+  async listMyRequests(actor: AuthenticatedUser): Promise<DelegationRequestView[]> {
+    const rows = await this.db
       .admin()
       .select()
       .from(delegationRequests)
@@ -174,6 +191,24 @@ export class DelegationsService {
         ),
       )
       .orderBy(desc(delegationRequests.createdAt));
+
+    const ids = [
+      ...new Set(
+        rows.flatMap((r) => [r.requestingUserId, ...(r.targetUserId ? [r.targetUserId] : [])]),
+      ),
+    ];
+    const names = new Map<string, string>();
+    await Promise.all(
+      ids.map(async (id) => {
+        names.set(id, (await this.profileSummary(id)).fullName);
+      }),
+    );
+
+    return rows.map((r) => ({
+      ...r,
+      requesterName: names.get(r.requestingUserId) ?? 'Utente Panacea',
+      targetName: r.targetUserId ? (names.get(r.targetUserId) ?? null) : null,
+    }));
   }
 
   // ---------- public / invitation side ----------
@@ -450,7 +485,7 @@ export class DelegationsService {
 
   // ---------- delegations list / revoke / sub ----------
 
-  async list(actor: AuthenticatedUser, as: DelegationListRole = 'all'): Promise<Delegation[]> {
+  async list(actor: AuthenticatedUser, as: DelegationListRole = 'all'): Promise<DelegationView[]> {
     const admin = this.db.admin();
     const filter =
       as === 'delegator'
@@ -461,11 +496,26 @@ export class DelegationsService {
               eq(delegations.delegatorUserId, actor.id),
               eq(delegations.delegateUserId, actor.id),
             );
-    return admin
+    const rows = await admin
       .select()
       .from(delegations)
       .where(filter)
       .orderBy(desc(delegations.createdAt));
+
+    const ids = [...new Set(rows.flatMap((r) => [r.delegatorUserId, r.delegateUserId]))];
+    const parties = new Map<string, PartySummary>();
+    await Promise.all(ids.map(async (id) => parties.set(id, await this.partySummary(id))));
+
+    return rows.map((r) => ({
+      ...r,
+      delegator: parties.get(r.delegatorUserId)!,
+      delegate: parties.get(r.delegateUserId)!,
+    }));
+  }
+
+  private async partySummary(userId: string): Promise<PartySummary> {
+    const s = await this.profileSummary(userId);
+    return { id: userId, name: s.fullName, email: s.email, role: s.role };
   }
 
   async revoke(opts: ActorOpts & { id: string; reason?: string }): Promise<void> {
@@ -738,7 +788,7 @@ export class DelegationsService {
     const fullName = await this.fullName(userId, user.role);
     return {
       fullName,
-      role: user.role as 'patient' | 'doctor' | 'institution_admin',
+      role: user.role,
       email: user.email,
     };
   }

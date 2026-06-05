@@ -138,6 +138,12 @@ describe('Delegations e2e (citizen-to-citizen)', () => {
     expect(listRes.status).toBe(200);
     expect(listRes.body).toHaveLength(1);
     expect(listRes.body[0].status).toBe('active');
+
+    // The list is enriched with counterparty identity for the web mandate view.
+    expect(listRes.body[0].delegate.name).toBe('Figlia Rossi');
+    expect(listRes.body[0].delegate.email).toBe('figlia@test.local');
+    expect(listRes.body[0].delegator.name).toBe('Nonna Bianchi');
+    expect(listRes.body[0].delegator.role).toBe('patient');
   });
 
   it('rejects OTP after too many failed attempts', async () => {
