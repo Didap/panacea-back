@@ -12,7 +12,7 @@ Phases are independent and each ships with tests, a dated work log under `docs/`
 - [x] Migration: RLS policies (panacea_app vs panacea_admin)
 - [x] CLAUDE.md, README.md, .env.example
 - [x] Health pass: green install + lint + typecheck + build + e2e on a fresh checkout (2026-06-05, see `docs/backend_health_2026-06-05.md`)
-- [ ] CI workflow (lint + typecheck + e2e against ephemeral Postgres)
+- [x] CI workflow (lint + typecheck + build + unit + e2e against an ephemeral Postgres service) (2026-06-05, see `docs/ci_2026-06-05.md`)
 
 ## Phase 1 — Identity (in progress, 2026-05-19)
 
@@ -71,6 +71,7 @@ Implementation roadmap:
 
 ## Phase 5 — Notifications + hardening
 
+- [ ] RLS regression test in CI: connect as `panacea_app`, set `app.current_user_id`, assert a non-owner/non-delegate cannot read another patient's `health_documents`. CI today proves migrations apply, not that the policies enforce (v0 services use the admin pool).
 - [ ] Resend transactional email
 - [ ] Prometheus /metrics (parity with Cityfix)
 - [ ] @nestjs/throttler global + per-endpoint
