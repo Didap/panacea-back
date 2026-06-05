@@ -114,7 +114,7 @@ export class NotificationsService {
 
   async sendDelegationRevokedEmail(ctx: DelegationRevokedContext): Promise<void> {
     const text = [
-      `La delega tra ${ctx.delegatorName} e ${ctx.delegateName} su Panacea e\' stata revocata.`,
+      `La delega tra ${ctx.delegatorName} e ${ctx.delegateName} su Panacea e' stata revocata.`,
       '',
       'L\'accesso e\' stato chiuso immediatamente. Nessuna nuova azione puo\' essere compiuta sotto questa delega.',
     ].join('\n');

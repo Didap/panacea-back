@@ -26,4 +26,19 @@ export default tseslint.config(
       'no-console': ['warn', { allow: ['warn', 'error'] }],
     },
   },
+  {
+    // supertest's request(app.getHttpServer()) and res.body are typed `any`; relax unsafe rules in e2e specs.
+    files: ['test/**/*.ts'],
+    rules: {
+      '@typescript-eslint/no-unsafe-argument': 'off',
+      '@typescript-eslint/no-unsafe-assignment': 'off',
+      '@typescript-eslint/no-unsafe-member-access': 'off',
+      '@typescript-eslint/no-unsafe-call': 'off',
+    },
+  },
+  {
+    // Config files at the repo root are outside tsconfig's include; skip type-aware linting for them.
+    files: ['**/*.mjs', '**/*.cjs', '**/*.js', 'drizzle.config.ts'],
+    ...tseslint.configs.disableTypeChecked,
+  },
 );

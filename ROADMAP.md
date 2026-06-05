@@ -11,6 +11,7 @@ Phases are independent and each ships with tests, a dated work log under `docs/`
 - [x] Migration: initial schema
 - [x] Migration: RLS policies (panacea_app vs panacea_admin)
 - [x] CLAUDE.md, README.md, .env.example
+- [x] Health pass: green install + lint + typecheck + build + e2e on a fresh checkout (2026-06-05, see `docs/backend_health_2026-06-05.md`)
 - [ ] CI workflow (lint + typecheck + e2e against ephemeral Postgres)
 
 ## Phase 1 — Identity (in progress, 2026-05-19)
@@ -58,6 +59,7 @@ Implementation roadmap:
 - [x] Controllers: `/delegation-requests` (auth), `/inviti/:token` (public + token-based), `/delegations` (auth) (commit 2, 2026-05-19)
 - [x] Cron: expire pending requests after 7d, expire delegations past `expires_at` (commit 2, 2026-05-19)
 - [x] `X-Acting-As` header + subject resolver wired into `/documents` so delegates can read/upload on behalf of the data owner (commit 2, 2026-05-19)
+- [x] Enrich `GET /delegations` + `GET /delegation-requests/mine` with counterparty identity (name/email/role); prerequisite for web commit 3 (2026-06-05, see `docs/delegations_web_enrichment_2026-06-05.md`)
 - [ ] Resend driver wired for real (currently stubbed; flip `NOTIFICATIONS_DRIVER=resend` once API keys land)
 - [ ] Web: "Richiedi delega" form, invitation accept flow, mandate list (active/expired/revoked), "operi per conto di X" banner, doctor sub-delegation UI (commit 3)
 

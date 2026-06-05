@@ -1,6 +1,10 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { STORAGE_DRIVER_TOKEN } from './storage.module';
-import type { StorageDriver, StoreInput, StoreResult } from './storage.driver';
+import {
+  STORAGE_DRIVER_TOKEN,
+  type StorageDriver,
+  type StoreInput,
+  type StoreResult,
+} from './storage.driver';
 
 @Injectable()
 export class StorageService {

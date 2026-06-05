@@ -5,7 +5,6 @@ import { ValidationPipe } from '@nestjs/common';
 import helmet from 'helmet';
 import cookieParser from 'cookie-parser';
 import { AppModule } from './app.module';
-import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
 import { loadEnv } from './config/env';
 
 async function bootstrap() {
@@ -28,7 +27,6 @@ async function bootstrap() {
       transformOptions: { enableImplicitConversion: true },
     }),
   );
-  app.useGlobalFilters(new AllExceptionsFilter(app.get(Logger)));
 
   await app.listen(env.PORT);
   app.get(Logger).log(`panacea-backend listening on http://localhost:${env.PORT}/api/v1`);

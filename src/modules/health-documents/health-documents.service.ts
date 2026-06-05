@@ -1,7 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { and, desc, eq, isNull } from 'drizzle-orm';
-import { fileTypeFromBuffer } from 'file-type';
 import { DatabaseService } from '../../database/database.service';
 import { StorageService } from '../storage/storage.service';
 import { AuditService } from '../audit/audit.service';
@@ -15,6 +14,13 @@ import type { AuthenticatedUser } from '../../common/types/authenticated-user';
 import { CodedException, ErrorCodes } from '../../common/constants/error-codes';
 import { resolveSubject } from '../../common/utils/subject-resolver';
 import type { Env } from '../../config/env';
+
+// file-type v21 is ESM-only; this indirection stops TS (module=commonjs) from
+// down-leveling the dynamic import to require(), which cannot load an ESM package.
+// eslint-disable-next-line @typescript-eslint/no-implied-eval
+const importEsm = new Function('specifier', 'return import(specifier)') as (
+  specifier: string,
+) => Promise<unknown>;
 
 const ALLOWED_MIME = new Set([
   'application/pdf',
@@ -65,7 +71,8 @@ export class HealthDocumentsService {
       throw new CodedException(ErrorCodes.DOCUMENT_FILE_TOO_LARGE, { maxBytes });
     }
 
-    const detected = await fileTypeFromBuffer(input.buffer);
+    const fileType = (await importEsm('file-type')) as typeof import('file-type');
+    const detected = await fileType.fileTypeFromBuffer(input.buffer);
     const trueMime = detected?.mime ?? (input.declaredMime === 'text/plain' ? 'text/plain' : null);
     if (!trueMime) {
       throw new CodedException(ErrorCodes.DOCUMENT_MIME_NOT_ALLOWED);

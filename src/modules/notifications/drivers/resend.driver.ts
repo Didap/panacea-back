@@ -8,9 +8,11 @@ export class ResendNotificationDriver implements NotificationDriver {
     private readonly from: string,
   ) {}
 
-  async send(_message: NotificationMessage): Promise<void> {
+  send(_message: NotificationMessage): Promise<void> {
     void this.apiKey;
     void this.from;
-    throw new Error('ResendNotificationDriver not yet implemented; switch NOTIFICATIONS_DRIVER=console for dev');
+    return Promise.reject(
+      new Error('ResendNotificationDriver not yet implemented; switch NOTIFICATIONS_DRIVER=console for dev'),
+    );
   }
 }
