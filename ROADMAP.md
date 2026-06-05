@@ -71,7 +71,7 @@ Implementation roadmap:
 
 ## Phase 5 — Notifications + hardening
 
-- [ ] RLS regression test in CI: connect as `panacea_app`, set `app.current_user_id`, assert a non-owner/non-delegate cannot read another patient's `health_documents`. CI today proves migrations apply, not that the policies enforce (v0 services use the admin pool).
+- [x] RLS regression test in CI: connect as `panacea_app`, set `app.current_user_id`, assert owner-only access, delegate widening + revoke, and `WITH CHECK` write protection. Mutation-verified (disabling RLS turns it red). (2026-06-05, see `docs/rls_test_2026-06-05.md`)
 - [ ] Resend transactional email
 - [ ] Prometheus /metrics (parity with Cityfix)
 - [ ] @nestjs/throttler global + per-endpoint
